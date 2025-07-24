@@ -1,0 +1,8 @@
+node_modules/
+uploads/
+.env
+__pycache__/
+*.pyc
+*.log
+preprocessed.jpg
+rotated_debug.jpg
