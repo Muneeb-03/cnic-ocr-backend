@@ -11,6 +11,7 @@ import os
 load_dotenv()
 tesseract_path = os.getenv("TESSERACT_PATH")
 pytesseract.pytesseract.tesseract_cmd = tesseract_path
+
 def fix_image_orientation(pil_img):
     try:
         exif = pil_img._getexif()
@@ -35,22 +36,15 @@ def fix_image_orientation(pil_img):
     return pil_img
 
 def clean_name(name_line):
-    # Remove anything that's not a letter or space
+    # Remove anything that's not a letter
     name_line = re.sub(r'[^a-zA-Z]', '', name_line)
-
-    # Step 2: Insert space before every uppercase letter that's not at the start
+    # Insert spaces before uppercase letters (if needed)
     spaced = re.sub(r'(?<!^)([A-Z])', r' \1', name_line)
-
-    # Step 3: Optional: capitalize first letters
     return spaced.strip()
 
-def extract_cnic_data(image_path):
+def extract_data(image_path):
     image = Image.open(image_path)
-    # image = fix_image_orientation(image)
-    # image = image.rotate(90, expand=True)
-    # image = fix_image_orientation(Image.open(image_path))
-    # image.save("rotated_debug.jpg")
-
+    # image = image.rotate(90, expand=True)  # adjust as needed
 
     img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 
@@ -59,7 +53,14 @@ def extract_cnic_data(image_path):
     _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     denoised = cv2.medianBlur(thresh, 3)
 
-    # OCR for Name
+    # Full OCR (no whitelist so we can detect roll number)
+    full_text = pytesseract.image_to_string(
+        denoised,
+        config='--oem 3 --psm 4'
+    )
+    lines = [line.strip() for line in full_text.split('\n') if line.strip()]
+
+    # Extract name (first alphabetic line)
     text_alpha = pytesseract.image_to_string(
         denoised,
         config='--oem 3 --psm 4 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz '
@@ -71,28 +72,23 @@ def extract_cnic_data(image_path):
 
     alpha_lines = [line.strip() for line in text_alpha.split('\n') if line.strip()]
 
-    # OCR for CNIC
-    text_numeric = pytesseract.image_to_string(
-        denoised,
-        config='--oem 3 --psm 4 -c tessedit_char_whitelist=0123456789-'
-    )
-    
-    # print("=== CNIC TEXT ===")
-    # print(text_numeric)
-
-    cnic_match = re.search(r'\d{5}-\d{7}-\d', text_numeric)
-    cnic = cnic_match.group() if cnic_match else "Not found"
-
+    # extract name
+    # little erorr adds ig to the start of name trying to find the cause
     name = "Not found"
     for i, line in enumerate(alpha_lines):
         if 'Name' in line and i + 1 < len(alpha_lines):
-            raw_name = alpha_lines[i + 1]
-            name = clean_name(raw_name)
+            name = clean_name(alpha_lines[i + 1])
             break
-        elif i == 0:
+        elif len(line.split()) >= 2 and re.match(r'^[A-Za-z\s]+$', line):
             name = clean_name(line)
+            break
 
-    return {'name': name, 'cnic': cnic}
+
+    # Extract roll number
+    roll_match = re.search(r'\d{4}-\d{2}-\d{4}', full_text)
+    roll_number = roll_match.group() if roll_match else "Not found"
+
+    return {'name': name, 'roll_number': roll_number}
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
@@ -105,7 +101,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     try:
-        result = extract_cnic_data(image_path)
+        result = extract_data(image_path)
         print(json.dumps(result))
     except Exception as e:
         print(json.dumps({"error": str(e)}))
